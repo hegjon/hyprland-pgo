@@ -8,7 +8,8 @@ Profile guided optimization (GCC PGO) for Omarchy's Hyprland package, trained an
 | `scripts/pgo.sh` | `train DIR HOST...`: build the instrumented package, train on the machines, merge the counters into `DIR/profile`. `build DIR`: build with that profile into `DIR/pgo`. |
 | `scripts/train-host.sh` | The training on one machine (as root, started by `pgo.sh`): instrumented Hyprland in place of Hypoland, one round of every workload and the session checks, then Hypoland back. |
 | `bench/` | Hypoland's night A/B kit (`abnight.sh`, `start.sh`, `status.sh`, `report.sh`, `pr/`), set up to run the PGO package in the stock blocks, and `compare.py` against a night's stock Hyprland. |
-| `results/` | Trainings, profiles, packages and fetched benchmark runs. Not in git (packages and profiles are large). |
+| `profiles/` | Trained profiles in git: `hyprland-<pkgver>-<pkgrel>-pgo-<hosts>.tar.zst` with the merged counters (`profile/*.gcda`), the recipe's checksums (`recipe`) and `meta` (hosts, date, build directory, GCC). About 0.6 MB each, 12 MB unpacked. |
+| `results/` | Trainings, unpacked profiles, packages and fetched benchmark runs. Not in git (packages are large). |
 
 Needs a Hypoland checkout for `scripts/bench` (`HYPOLAND_TREE`, default `~/Work/hypoland`), whose night runs in `test-results/` are the stock baseline.
 
@@ -17,9 +18,12 @@ Needs a Hypoland checkout for `scripts/bench` (`HYPOLAND_TREE`, default `~/Work/
 Claim the machines first (`lab claim`). The training takes about 40 minutes per machine (x86_64 only).
 
 ```sh
-scripts/pgo.sh train results/pgo-<date> t490 [more hosts]
+scripts/pgo.sh train results/pgo-<date> t490 [more hosts]    # ends with the profile packed into profiles/
 scripts/pgo.sh build results/pgo-<date>
+scripts/pgo.sh build profiles/hyprland-0.57.2-2-pgo-t490.tar.zst   # from the committed profile, no training
 ```
+
+Commit a new `profiles/*.tar.zst` after a training; `scripts/pgo.sh pack DIR` packs one again. The tarball is reproducible (sorted, fixed time and owner), so packing the same profile twice gives the same file and git sees no change. `build` warns when the recipe changed since the training (functions that changed lose their profile) and when the profile was trained from another build directory (then GCC matches none of it).
 
 The desktop has no `glaze` installed, so the builds there use `MAKEPKG_ARGS=-d CMAKE_PREFIX_PATH=~/.cache/hyprland-pgo/deps/root/usr` (glaze's package unpacked there).
 

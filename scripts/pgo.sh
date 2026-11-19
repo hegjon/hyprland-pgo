@@ -7,7 +7,11 @@
 #                                     plugin in place of Hypoland, run one round of every workload and the session
 #                                     checks (scripts/train-host.sh), put Hypoland back; then merge the machines'
 #                                     counters into DIR/profile
+#                                     and pack it into profiles/ (as pack)
 #   scripts/pgo.sh build DIR          build the package with DIR/profile into DIR/pgo
+#   scripts/pgo.sh build FILE.tar.zst build with a packed profile (profiles/): unpacked into results/<its name>/
+#   scripts/pgo.sh pack DIR           DIR/profile with its recipe sums and metadata as
+#                                     profiles/hyprland-<pkgver>-<pkgrel>-pgo-<hosts>.tar.zst, for git
 #
 # HYPOLAND_TREE       the Hypoland checkout whose scripts/bench runs on the machines (default ~/Work/hypoland)
 # HYPRLAND_PKGBUILD   the recipe (default pkgbuild/ of this repository)
@@ -23,7 +27,12 @@ set -u
 cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
 ROOT=$PWD
 CMD=${1:-}; DIR=${2:-}
-[ -n "$DIR" ] || { sed -n '2,22p' "$0"; exit 1; }
+[ -n "$DIR" ] || { sed -n '2,26p' "$0"; exit 1; }
+TARBALL=""
+if [ "$CMD" = build ] && [[ $DIR == *.tar.zst ]]; then
+    TARBALL=$(readlink -f "$DIR") && [ -f "$TARBALL" ] || { echo "no profile $DIR"; exit 1; }
+    DIR=results/$(basename "$TARBALL" .tar.zst)
+fi
 mkdir -p "$DIR" && DIR=$(readlink -f "$DIR") || exit 1
 RECIPE=${HYPRLAND_PKGBUILD:-$ROOT/pkgbuild}
 HYPOLAND=${HYPOLAND_TREE:-$HOME/Work/hypoland}
@@ -33,6 +42,26 @@ TITLEBARS=${TITLEBARS:-0.4.0-1}
 
 # the recipe's files, to tell whether a profile was trained on what is built now
 recipe_sum() { (cd "$RECIPE" && sha256sum PKGBUILD *.patch); }
+
+# pack: DIR/profile, DIR/recipe and DIR/meta in a reproducible tarball under profiles/
+pack() {
+    local hosts name out
+    compgen -G "$DIR/profile/*.gcda" >/dev/null || { echo "$DIR has no profile"; exit 1; }
+    [ -s "$DIR/meta" ] || { echo "$DIR has no meta (train writes it)"; exit 1; }
+    hosts=$(sed -n 's/^hosts: //p' "$DIR/meta" | tr ' ' '+')
+    [ "$(echo "$hosts" | tr '+' '\n' | wc -l)" -gt 3 ] && hosts="$(echo "$hosts" | tr '+' '\n' | wc -l)hosts"
+    name=hyprland-$(sed -n 's/^pkgver: //p' "$DIR/meta")-pgo-$hosts.tar.zst
+    mkdir -p profiles
+    out=profiles/$name
+    tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C "$DIR" -c profile recipe meta | zstd -19 -T0 -q -f -o "$out" || exit 1
+    echo "packed $out ($(du -h --apparent-size "$out" | cut -f1), $(ls "$DIR/profile" | wc -l) counter files)"
+}
+
+# meta HOST...: what a packed profile needs to say about its training
+meta() {
+    printf 'pkgver: %s\nhosts: %s\ntrained: %s\nbuilddir: %s\ngcc: %s\n' "$(cd "$RECIPE" && bash -c 'source PKGBUILD; echo "$pkgver-$pkgrel"')" \
+        "$*" "$(date +%F)" "$CACHE" "$(gcc --version | head -n 1)"
+}
 
 # makepkg_in LOG PKGDEST [VAR=value...]: a build in the profile builds' directory, its packages listed in DIR/packages
 makepkg_in() {
@@ -83,8 +112,19 @@ train)
     rm -rf "$DIR/profile"; cp -r "${dirs[0]}" "$DIR/profile"
     for d in "${dirs[@]:1}"; do gcov-tool merge -o "$DIR/merged" "$DIR/profile" "$d" && rm -rf "$DIR/profile" && mv "$DIR/merged" "$DIR/profile"; done
     echo "profile of ${#dirs[@]} machines in $DIR/profile: $(ls "$DIR/profile" | wc -l) counter files"
+    meta "${dirs[@]##*/prof-}" >"$DIR/meta"
+    pack
+    ;;
+pack)
+    pack
     ;;
 build)
+    if [ -n "$TARBALL" ]; then
+        rm -rf "$DIR/profile" && tar -C "$DIR" -xf "$TARBALL" || exit 1
+        echo "profile $(basename "$TARBALL") in $DIR: $(sed -n 's/^hosts: //p' "$DIR/meta"), trained $(sed -n 's/^trained: //p' "$DIR/meta")"
+    fi
+    [ ! -s "$DIR/meta" ] || [ "$(sed -n 's/^builddir: //p' "$DIR/meta")" = "$CACHE" ] ||
+        echo "warning: the profile was trained from a build in $(sed -n 's/^builddir: //p' "$DIR/meta"), this one is in $CACHE: GCC will not match it (HYPRLAND_PGO_BUILDDIR)"
     compgen -G "$DIR/profile/*.gcda" >/dev/null || { echo "$DIR has no profile, train first"; exit 1; }
     [ "$(recipe_sum)" = "$(cat "$DIR/recipe" 2>/dev/null)" ] ||
         echo "note: the recipe changed since the training, functions that changed are built without a profile"
@@ -93,5 +133,5 @@ build)
     grep -c 'profile data may be out of date\|coverage mismatch' "$DIR/build-use.log" | sed 's/^/stale-profile warnings: /'
     grep -v -- -debug- "$DIR/packages"
     ;;
-*) sed -n '2,22p' "$0"; exit 1 ;;
+*) sed -n '2,26p' "$0"; exit 1 ;;
 esac
