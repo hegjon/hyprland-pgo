@@ -3,7 +3,8 @@
 # fetched by report.sh) against the stock blocks of Hypoland's night A/B run NIGHT, from the block files themselves.
 #   P   = this run: the PGO build, RUN_DIR/<host>/hyprland-N.txt
 #   S18 = NIGHT's stock, S17 = PREV_NIGHT's stock (the night-to-night drift of the same binary: the noise floor)
-#   H18 = NIGHT's Hypoland, for the reference
+#   H18 = NIGHT's Hypoland, for the reference; HP = RUN's Hypoland blocks, if it alternated (the control when it is the
+#         same Hypoland package as NIGHT's)
 # Nights are $HYPOLAND_TREE/test-results/<night>/<night>/<host> (default ~/Work/hypoland, night-20261118 and -17).
 # Per machine and metric group the median ratio; then the metrics where PGO moved by more than 10% and its median lies
 # outside the stock night's per-block range.
@@ -31,6 +32,7 @@ N = {
     "s18": lambda h: blocks(f"{T}/{NIGHT}/{NIGHT}/{h}", "hyprland"),
     "s17": lambda h: blocks(f"{T}/{PREV}/{PREV}/{h}", "hyprland"),
     "h18": lambda h: blocks(f"{T}/{NIGHT}/{NIGHT}/{h}", "hypoland"),
+    "hp":  lambda h: blocks(f"{RUN}/{h}", "hypoland"),
 }
 GROUPS = [("cpu %", r"^cpu\.[^.]*\.percent$"), ("cpu ms/frame", r"^cpu\..*\.ms_per_frame$"),
           ("latency", r"^latency\..*(?<!p90)_ms$"), ("fps", r"^fps\.[^.]*(\.screen)?$"),
@@ -44,6 +46,9 @@ def gmed(h, rx, a, b):
     r = [x for k in data[h][a] if re.search(rx, k) for x in [ratio(h, k, a, b, 0.05)] if x]
     return "%.3f (%d)" % (statistics.median(r), len(r)) if r else "-"
 cols = [("PGO/stock", "p", "s18"), ("stock 18/17", "s18", "s17"), ("hypoland/stock", "h18", "s18")]
+# a run that alternates with Hypoland (ABNIGHT_ORDER="hypoland hyprland"): the same Hypoland package as NIGHT is the
+# control for the machines' own drift between NIGHT and this run
+if any(data[h]["hp"] for h in HOSTS): cols.insert(1, ("hypoland run/night", "hp", "h18"))
 print("blocks per machine (PGO this run / stock 11-18 / stock 11-17):")
 for h in HOSTS:
     c = lambda n: max((len(v) for k, v in data[h][n].items() if k.startswith("cpu.")), default=0)
