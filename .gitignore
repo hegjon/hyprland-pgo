@@ -1,1 +1,4 @@
 results/
+# makepkg downloads the sources next to the PKGBUILD
+pkgbuild/*.tar.gz
+pkgbuild/*.pkg.tar.*
