@@ -8,6 +8,8 @@
 #                                     checks (scripts/train-host.sh), put Hypoland back; then merge the machines'
 #                                     counters into DIR/profile
 #                                     and pack it into profiles/ (as pack)
+#   scripts/pgo.sh collect DIR [HOST...] wait for a training that runs on the machines (after the desktop went away),
+#                                     then fetch, merge and pack as train does (default: the hosts train was given)
 #   scripts/pgo.sh build DIR          build the package with DIR/profile into DIR/pgo
 #   scripts/pgo.sh build FILE.tar.zst build with a packed profile (profiles/): unpacked into results/<its name>/
 #   scripts/pgo.sh pack DIR           DIR/profile with its recipe sums and metadata as
@@ -27,7 +29,7 @@ set -u
 cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
 ROOT=$PWD
 CMD=${1:-}; DIR=${2:-}
-[ -n "$DIR" ] || { sed -n '2,26p' "$0"; exit 1; }
+[ -n "$DIR" ] || { sed -n '2,28p' "$0"; exit 1; }
 TARBALL=""
 if [ "$CMD" = build ] && [[ $DIR == *.tar.zst ]]; then
     TARBALL=$(readlink -f "$DIR") && [ -f "$TARBALL" ] || { echo "no profile $DIR"; exit 1; }
@@ -72,7 +74,7 @@ makepkg_in() {
     (cd "$RECIPE" && env BUILDDIR="$CACHE" PKGDEST="$dest" "$@" makepkg --packagelist) >"$DIR/packages" 2>/dev/null
 }
 
-train_host() {
+start_host() {
     local h=$1 pkg=$2 c=/var/cache/pacman/pkg before restore pr=""
     [ "$(ssh -o BatchMode=yes "root@$h" uname -m)" = x86_64 ] || { echo "$h: not reachable or not x86_64"; return 1; }
     before=$(ssh "root@$h" 'pacman -Q hypoland' | tr ' ' '-') || { echo "$h: no hypoland installed"; return 1; }
@@ -86,14 +88,33 @@ train_host() {
         { echo "$h: copy failed"; return 1; }
     ssh "root@$h" "TRAIN_WORKLOADS='${TRAIN_WORKLOADS:-}' TRAIN_NO_CHECK='${TRAIN_NO_CHECK:-}' setsid -f nohup bash /root/hyprland-pgo/train-host.sh \
         /root/hyprland-pgo/out $restore '/root/hyprland-pgo/${pkg##*/} $c/omarchy-hyprland-titlebars-$TITLEBARS-x86_64.pkg.tar.zst' $pr >/dev/null 2>&1 </dev/null"
+}
+
+# collect_host HOST: waits for the training on HOST to end (it runs on the machine on its own, so this can be run again
+# after the desktop went away), then fetches its logs and counters
+collect_host() {
+    local h=$1
+    ssh "root@$h" 'test -d /root/hyprland-pgo/out' || { echo "$h: no training there"; return 1; }
     # an hour for the round, half an hour for the checks
     for _ in $(seq 1 120); do
-        sleep 60
         ssh "root@$h" 'test -e /root/hyprland-pgo/out/done' 2>/dev/null && break
+        sleep 60
     done
     for f in log measure.txt check.txt pacman.log; do scp -q "root@$h:/root/hyprland-pgo/out/$f" "$DIR/train-$h-$f" 2>/dev/null; done
     rm -rf "$DIR/prof-$h"; scp -q -r "root@$h:/var/tmp/hyprland-pgo" "$DIR/prof-$h"
     echo "$h: $(ls "$DIR/prof-$h" 2>/dev/null | wc -l) counter files, $(tail -n 3 "$DIR/train-$h-log" 2>/dev/null | tr '\n' ' ')"
+}
+
+# merge_pack HOST...: the hosts' counters merged into DIR/profile, its meta, packed into profiles/
+merge_pack() {
+    local dirs=() h d
+    for h in "$@"; do [ -n "$(ls "$DIR/prof-$h" 2>/dev/null)" ] && dirs+=("$DIR/prof-$h"); done
+    [ ${#dirs[@]} -gt 0 ] || { echo "no machine gave a profile"; exit 1; }
+    rm -rf "$DIR/profile"; cp -r "${dirs[0]}" "$DIR/profile"
+    for d in "${dirs[@]:1}"; do gcov-tool merge -o "$DIR/merged" "$DIR/profile" "$d" && rm -rf "$DIR/profile" && mv "$DIR/merged" "$DIR/profile"; done
+    echo "profile of ${#dirs[@]} machines in $DIR/profile: $(ls "$DIR/profile" | wc -l) counter files"
+    meta "${dirs[@]##*/prof-}" >"$DIR/meta"
+    pack
 }
 
 case $CMD in
@@ -106,14 +127,15 @@ train)
     makepkg_in "$DIR/build-generate.log" "$DIR/generate" PGO_GENERATE=/var/tmp/hyprland-pgo
     pkg=$(grep -m1 '/hyprland-[0-9]' "$DIR/packages")
     recipe_sum >"$DIR/recipe"
-    for h in "$@"; do train_host "$h" "$pkg" & done; wait
-    dirs=(); for h in "$@"; do [ -n "$(ls "$DIR/prof-$h" 2>/dev/null)" ] && dirs+=("$DIR/prof-$h"); done
-    [ ${#dirs[@]} -gt 0 ] || { echo "no machine gave a profile"; exit 1; }
-    rm -rf "$DIR/profile"; cp -r "${dirs[0]}" "$DIR/profile"
-    for d in "${dirs[@]:1}"; do gcov-tool merge -o "$DIR/merged" "$DIR/profile" "$d" && rm -rf "$DIR/profile" && mv "$DIR/merged" "$DIR/profile"; done
-    echo "profile of ${#dirs[@]} machines in $DIR/profile: $(ls "$DIR/profile" | wc -l) counter files"
-    meta "${dirs[@]##*/prof-}" >"$DIR/meta"
-    pack
+    echo "$*" >"$DIR/hosts"
+    for h in "$@"; do start_host "$h" "$pkg"; done
+    for h in "$@"; do collect_host "$h" & done; wait
+    merge_pack "$@"
+    ;;
+collect)
+    shift 2; set -- ${*:-$(cat "$DIR/hosts" 2>/dev/null)}; [ $# -gt 0 ] || { echo "collect needs machines"; exit 1; }
+    for h in "$@"; do collect_host "$h" & done; wait
+    merge_pack "$@"
     ;;
 pack)
     pack
@@ -133,5 +155,5 @@ build)
     grep -c 'profile data may be out of date\|coverage mismatch' "$DIR/build-use.log" | sed 's/^/stale-profile warnings: /'
     grep -v -- -debug- "$DIR/packages"
     ;;
-*) sed -n '2,26p' "$0"; exit 1 ;;
+*) sed -n '2,28p' "$0"; exit 1 ;;
 esac
