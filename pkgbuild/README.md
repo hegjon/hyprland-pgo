@@ -9,3 +9,12 @@ Automatic upstream version bumps are held (`sync: false`) because `omarchy-hyprl
 ## x86_64
 
 This recipe also builds for x86_64, so PCs take this build instead of Arch's `extra/hyprland`: `[omarchy]` comes before `[extra]` in Omarchy's `pacman.conf`. That gives PCs the patches above and keeps them on the Hyprland the titlebars plugin was built against when Arch moves first. Move both architectures and the plugin to a newer Hyprland in one change, with a `pkgrel` above Arch's for the same version so a machine already on Arch's build moves to this one.
+
+## PGO
+
+The recipe can build Hyprland with profile guided optimization (GCC). It is off by default: without the variables below the build is the plain one, and the published packages stay plain until a profile is trained for the build machine's path.
+
+- `PGO_GENERATE=DIR makepkg` builds an instrumented Hyprland with `pkgrel=0.1`, so it sorts before every real release and `pacman -Syu` replaces it. Hyprland, hyprctl, hyprpm and start-hyprland write their counters into `DIR` when they exit, so `DIR` has to be writable by the session's user (`mkdir -m 1777`). Install it, use a session for the workloads to train, then end the session; Hyprland writes the counters on a clean exit (SIGTERM, `hyprctl dispatch exit`), not when it is killed.
+- `PGO_PROFILE=DIR makepkg` builds with the counters in `DIR`. Merge the counters of several machines with `gcov-tool merge -o OUT A B`.
+
+GCC matches a function to its counters by a checksum that contains the absolute path of its source file, and `-fprofile-prefix-map` does not change that. A profile therefore fits only a build in the same `BUILDDIR` as the training's instrumented build: train and build with one fixed `BUILDDIR`. A function whose source or patches changed since the training builds without its profile and warns (`-Wno-error=coverage-mismatch`), so a stale profile never fails the build; retrain on a version bump.

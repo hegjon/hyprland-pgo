@@ -7,6 +7,8 @@ pkgname=(hyprland hyprpm)
 pkgver=0.57.2
 # Above Arch's 0.57.2-1, so an x86_64 machine that took Arch's build moves to this one
 pkgrel=2
+# The instrumented build of a PGO training is no package to keep: its release sorts before every real one (README.md)
+[[ -n ${PGO_GENERATE:-} ]] && pkgrel=0.1
 pkgdesc='a highly customizable dynamic tiling Wayland compositor'
 # Built for x86_64 too, so PCs get the patches below and move with the titlebars plugin: see README.md
 arch=(x86_64 aarch64)
@@ -95,7 +97,47 @@ prepare() {
 
 build() {
 	cd "$_archive"
+	_pgo_flags || return 1
 	make release PREFIX=/usr
+}
+
+# Profile guided optimization (README.md, "PGO"), only when the environment asks for it; without these variables
+# the build is the plain one:
+#   PGO_GENERATE=DIR  the instrumented build: Hyprland, hyprctl, hyprpm and start-hyprland write their counters into DIR
+#                     when they exit (DIR has to be writable by every user that runs them)
+#   PGO_PROFILE=DIR   the build with the counters in DIR (several trainings merged with `gcov-tool merge`)
+# GCC names the counter files after the object files' paths below $srcdir, but matches a function to its counters by
+# a checksum that has the absolute path of its source in it: the build with a profile has to run in the same
+# BUILDDIR as the training's build. A function changed since the training is compiled without its profile.
+_pgo_flags() {
+	local flags=() flag var
+	if [[ -n ${PGO_GENERATE:-} && -n ${PGO_PROFILE:-} ]]; then
+		error 'PGO_GENERATE and PGO_PROFILE are both set'
+		return 1
+	elif [[ -n ${PGO_GENERATE:-} ]]; then
+		flags=("-fprofile-generate=$PGO_GENERATE" -fprofile-update=prefer-atomic "-fprofile-prefix-path=$srcdir")
+	elif [[ -n ${PGO_PROFILE:-} ]]; then
+		if [[ ! -d $PGO_PROFILE ]] || ! compgen -G "$PGO_PROFILE/*.gcda" >/dev/null; then
+			error 'PGO_PROFILE has no counter files (*.gcda): %s' "$PGO_PROFILE"
+			return 1
+		fi
+		# a stale profile (patches or sources changed since the training) costs the functions it no longer
+		# matches their profile, it does not fail the build
+		flags=("-fprofile-use=$PGO_PROFILE" -fprofile-correction -Wno-missing-profile
+		       -Wno-error=coverage-mismatch "-fprofile-prefix-path=$srcdir")
+	else
+		return 0
+	fi
+	msg2 'PGO: %s' "${flags[*]}"
+	# CMake takes the flags from the environment only when it configures a new build directory, and the training
+	# and the build with its profile share BUILDDIR: no flags of the build before
+	rm -rf build
+	for flag in "${flags[@]}"; do
+		for var in CFLAGS CXXFLAGS LDFLAGS; do
+			printf -v "$var" '%s %s' "${!var}" "$flag"
+		done
+	done
+	export CFLAGS CXXFLAGS LDFLAGS
 }
 
 package_hyprland() {
