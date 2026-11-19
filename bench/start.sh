@@ -6,12 +6,14 @@
 # machine, built there), macmini-m1 M1_PKG the same way. Stock Hyprland 0.57.2-2 and omarchy-hyprland-titlebars 0.4.0-1 (the omarchy repository) must be
 # in each machine's pacman cache (pacman -Sw hyprland omarchy-hyprland-titlebars).
 NAME=$1 UNTIL=$2 PKG=$3 WL=${4:-}
+# both packages relative to where this is started, before the cd into the Hypoland tree
+HYPR_PGO=$(readlink -e "${HYPR_PGO:?the PGO package: HYPR_PGO=results/<run>/pgo/hyprland-...pkg.tar.zst}") || { echo "no package $HYPR_PGO"; exit 1; }
+PKG=$(readlink -e "$PKG") || { echo "no package $3"; exit 1; }
 C=/var/cache/pacman/pkg
 D=$(dirname "$(readlink -f "$0")")
 cd "${HYPOLAND_TREE:-$HOME/Work/hypoland}" && [ -d scripts/bench ] || { echo "no Hypoland tree (HYPOLAND_TREE)"; exit 1; }
 echo "scripts/bench from $(pwd) at $(git log --oneline -1 | cut -c1-60)"
 set -o pipefail
-HYPR_PGO=$(readlink -f "${HYPR_PGO:?the PGO package: HYPR_PGO=results/<run>/pgo/hyprland-...pkg.tar.zst}")
 for h in ${HOSTS:-t550 xps chromebook t460s t490 samsung-i5 p14s}; do
     case $h in x200|galaxybook|macmini-m1) echo "$h: not in this run (GLES 2 or aarch64)"; continue ;; esac
     case $h in
