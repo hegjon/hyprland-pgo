@@ -14,12 +14,15 @@ NIGHT, PREV = (sys.argv[2], sys.argv[3]) if len(sys.argv) > 3 else ("night-20261
 T = os.environ.get("HYPOLAND_TREE", os.path.expanduser("~/Work/hypoland")) + "/test-results"
 HOSTS = ["t550", "xps", "chromebook", "t460s", "t490", "samsung-i5", "p14s"]
 def blocks(d, prefix):
-    """{key: [value per block]} over prefix-N.txt and prefix-N-startup.txt"""
+    """{key: [value per block]} over prefix-N.txt and prefix-N-startup.txt, without the workloads measure.sh marked
+    invalid in that block (@ N invalid.<workload> 1: e.g. a client of an earlier workload still running)"""
     vals = {}
     for f in glob.glob(f"{d}/{prefix}-[0-9]*.txt"):
-        for line in open(f, errors="replace"):
-            p = line.split()
-            if len(p) < 4 or p[0] != "@": continue
+        rows = [l.split() for l in open(f, errors="replace")]
+        rows = [p for p in rows if len(p) >= 4 and p[0] == "@"]
+        bad = {p[2].split(".", 1)[1] for p in rows if p[2].startswith("invalid.")}
+        for p in rows:
+            if p[2].startswith("invalid.") or p[2].split(".")[1:2] and p[2].split(".")[1] in bad: continue
             try: v = float(p[3])
             except ValueError: continue
             vals.setdefault(p[2], []).append(v)
